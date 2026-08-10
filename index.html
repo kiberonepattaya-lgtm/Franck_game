@@ -48,9 +48,6 @@
   }
   canvas{
     background:#000;
-    image-rendering:pixelated;
-    image-rendering:-moz-crisp-edges;
-    image-rendering:crisp-edges;
     border:3px solid #1c3550;
     border-radius:4px;
     box-shadow:0 0 50px rgba(40,140,255,0.18), inset 0 0 40px rgba(0,0,0,0.6);
@@ -344,6 +341,47 @@ function drawEngineGlow(x, y, w, h, color, pulse){
   ctx.restore();
 }
 
+/* Soft colored bloom traced around a sprite's silhouette to soften its blocky
+   pixel edges. Each distinct (shape, color, px) combo is rasterized + blurred
+   once into an offscreen canvas and cached, so the per-frame cost is a single
+   drawImage rather than re-blurring dozens of pixel cells every frame. */
+const glowSpriteCache = new Map();
+function getGlowSprite(shape, px, color){
+  const key = px+'|'+color+'|'+shape.length+'|'+shape[0].length+'|'+shape.join('');
+  let entry = glowSpriteCache.get(key);
+  if(entry) return entry;
+  const blur = Math.max(2, px*0.9);
+  const pad = Math.ceil(blur*2);
+  const w = shape[0].length*px, h = shape.length*px;
+  const flat = document.createElement('canvas');
+  flat.width = w+pad*2; flat.height = h+pad*2;
+  const fctx = flat.getContext('2d');
+  fctx.fillStyle = color;
+  for(let r=0;r<shape.length;r++){
+    const row = shape[r];
+    for(let c=0;c<row.length;c++){
+      if(row[c]===' ') continue;
+      fctx.fillRect(pad+c*px, pad+r*px, px, px);
+    }
+  }
+  const blurred = document.createElement('canvas');
+  blurred.width = flat.width; blurred.height = flat.height;
+  const bctx = blurred.getContext('2d');
+  bctx.filter = 'blur('+blur+'px)';
+  bctx.drawImage(flat, 0, 0);
+  entry = { canvas: blurred, pad };
+  glowSpriteCache.set(key, entry);
+  return entry;
+}
+function drawSilhouetteGlow(shape, px, color, x, y, alpha){
+  const g = getGlowSprite(shape, px, color);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(g.canvas, x-g.pad, y-g.pad);
+  ctx.restore();
+}
+
 /* ============================= HELPERS ============================= */
 function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
 function rectsOverlap(a,b){
@@ -389,7 +427,7 @@ let bossActive = false;
 let megaBossFightTimer = 0;
 let spawnTimer = 0.6;
 let shakeTime = 0, shakeMag = 0;
-let bannerText = '', bannerTimer = 0;
+let bannerText = '', bannerTimer = 0, bannerDur = 0;
 let timeFreeze = 0;
 let enemySlowMult = 1;
 let highScore = parseInt(localStorage.getItem('pixelFleetHighScore')||'0',10) || 0;
@@ -422,7 +460,7 @@ for(let i=0;i<STAR_COUNT;i++){
 let selectedShipIndex = 0;
 
 const player = {
-  px:2, w:0, h:0, x:0, y:0,
+  px:2, w:0, h:0, x:0, y:0, velX:0, velY:0,
   speed:230, cooldown:0, lives:3, score:0, lifeAwards:0,
   invuln:0, rapid:0, mega:0, overdrive:0, ultra:0,
   specialCooldown:0, specialMax:0, specialName:'',
@@ -463,22 +501,25 @@ let drones = [];
 let megaSpawnTimer = 18;
 
 const ENEMY_TYPES = {
-  scout:   { shape:scoutShape, palette:scoutPalette, px:3, hp:1,  speed:120, score:10  },
+  scout:   { shape:scoutShape, palette:scoutPalette, px:3, hp:1,  speed:120, score:10,
+             glowColor:'#ff6a6a' },
   fighter: { shape:SLEEK_FLIPPED, palette:fighterPalette, px:2, hp:3, speed:70, score:30,
-             fireInt:[1.6,2.8], bulletSpeed:230, bulletColor:'#ff8844' },
+             fireInt:[1.6,2.8], bulletSpeed:230, bulletColor:'#ff8844', glowColor:'#ff3d8a' },
   swarm:   { shape:swarmShape, palette:swarmPalette, px:3, hp:1, speed:150, score:8,
-             erratic:true },
+             erratic:true, glowColor:'#ff4fd8' },
   gunner:  { shape:SLEEK_FLIPPED, palette:gunnerPalette, px:2, hp:4, speed:55, score:45,
-             fireInt:[2.0,3.2], bulletSpeed:210, bulletColor:'#33cfff', spreadShot:3, spreadAngle:0.5 },
+             fireInt:[2.0,3.2], bulletSpeed:210, bulletColor:'#33cfff', spreadShot:3, spreadAngle:0.5,
+             glowColor:'#33e0ff' },
   diver:   { shape:scoutShape, palette:diverPalette, px:3, hp:2, speed:190, score:25,
-             diver:true, homingSpeed:110 },
+             diver:true, homingSpeed:110, glowColor:'#ff8c1a' },
   bomber:  { shape:HEAVY_FLIPPED, palette:bomberPalette, px:3, hp:16, speed:35, score:90,
-             fireInt:[1.8,2.6], bulletSpeed:190, bulletColor:'#b380ff', spreadShot:3, spreadAngle:0.12 },
+             fireInt:[1.8,2.6], bulletSpeed:190, bulletColor:'#b380ff', spreadShot:3, spreadAngle:0.12,
+             glowColor:'#b380ff' },
   elite:   { shape:HEAVY_FLIPPED, palette:elitePalette, px:4, hp:45, speed:40, score:500,
-             fireInt:[0.5,0.9], bulletSpeed:260, isBoss:true },
+             fireInt:[0.5,0.9], bulletSpeed:260, isBoss:true, glowColor:'#ffd700' },
   megaboss: { shape:HEAVY_FLIPPED, palette:megaBossPalette, px:6, hp:45, speed:32, score:2500,
              fireInt:[0.35,0.65], bulletSpeed:300, bulletColor:'#ffcc00', spreadShot:3, spreadAngle:0.4,
-             isBoss:true, isMegaBoss:true }
+             isBoss:true, isMegaBoss:true, glowColor:'#ff4400' }
 };
 
 /* ============================= INPUT ============================= */
@@ -594,7 +635,7 @@ window.addEventListener('mouseup', ()=>{ mouseActive=false; mouseTarget=null; })
 function resetGame(){
   applyShipToPlayer(selectedShipIndex);
   player.lives = Math.max(6, player.maxLives); player.score = 7000; player.lifeAwards = 0;
-  player.x = W/2 - player.w/2; player.y = H-player.h-30;
+  player.x = W/2 - player.w/2; player.y = H-player.h-30; player.velX = 0; player.velY = 0;
   player.invuln = 0; player.rapid = 0; player.mega = 0; player.overdrive = 0; player.ultra = 0;
   player.cooldown = 0; player.specialCooldown = 0; player.lastStone = null;
   playerBullets = []; enemyBullets = []; enemies = []; particles = []; powerups = []; allies = []; vortices = []; drones = [];
@@ -604,7 +645,7 @@ function resetGame(){
 }
 resetGame();
 
-function showBanner(text, dur){ bannerText = text; bannerTimer = dur; }
+function showBanner(text, dur){ bannerText = text; bannerTimer = dur; bannerDur = dur; }
 
 /* ============================= POST-BOSS UPGRADES ============================= */
 const RARITY_WEIGHT = { common:70, rare:25, legendary:6 };
@@ -723,6 +764,7 @@ function spawnEnemy(typeKey, xOverride, hpOverride){
     fireInt: t.fireInt, bulletSpeed: t.bulletSpeed, bulletColor: t.bulletColor || '#ff8844',
     spreadShot: t.spreadShot || 0, spreadAngle: t.spreadAngle || 0.3,
     diver: !!t.diver, homingSpeed: t.homingSpeed || 0, erratic: !!t.erratic,
+    glowColor: t.glowColor || '#ffffff',
     shootTimer: t.fireInt ? (t.fireInt[0]+Math.random()*(t.fireInt[1]-t.fireInt[0])) : Infinity,
     isBoss: !!t.isBoss, isMegaBoss: !!t.isMegaBoss, flashT: 0, bossMinionsTimer: 0
   });
@@ -830,11 +872,20 @@ function updatePlayer(dt){
     const dy = (pointerTarget.y - player.h/2) - player.y;
     player.x += clamp(dx, -spd*dt, spd*dt);
     player.y += clamp(dy, -spd*dt, spd*dt);
-  } else if(vx||vy){
-    const len = Math.hypot(vx,vy);
-    vx/=len; vy/=len;
-    player.x += vx*spd*dt;
-    player.y += vy*spd*dt;
+    player.velX = 0; player.velY = 0;
+  } else {
+    // Ease keyboard movement toward its target velocity instead of snapping
+    // instantly to full speed / a dead stop, for a smoother launch and glide.
+    let targetVx = 0, targetVy = 0;
+    if(vx||vy){
+      const len = Math.hypot(vx,vy);
+      targetVx = vx/len*spd; targetVy = vy/len*spd;
+    }
+    const accel = spd*8;
+    player.velX += clamp(targetVx-player.velX, -accel*dt, accel*dt);
+    player.velY += clamp(targetVy-player.velY, -accel*dt, accel*dt);
+    player.x += player.velX*dt;
+    player.y += player.velY*dt;
   }
 
   player.x = clamp(player.x, 4, W-player.w-4);
@@ -1819,9 +1870,10 @@ function drawStars(){
 
 function drawPlayer(){
   if(player.invuln>0 && Math.floor(elapsed*12)%2===0) return;
+  const glowColor = (player.accent && (player.accent.l||player.accent.y||player.accent.e)) || '#ffcc66';
   if(!isMobile){
+    drawSilhouetteGlow(player.shape, player.px, glowColor, player.x, player.y, 0.5);
     const pulse = 0.6+0.4*Math.sin(elapsed*20);
-    const glowColor = (player.accent && (player.accent.y||player.accent.e)) || '#ffcc66';
     drawEngineGlow(player.x, player.y, player.w, player.h, glowColor, pulse);
   }
   drawSprite(player.shape, player.palette, player.x, player.y, player.px, null);
@@ -1831,7 +1883,11 @@ function drawPlayer(){
 function drawEnemies(){
   for(const en of enemies){
     const flash = en.flashT>0 ? '#ffffff' : null;
+    if(!isMobile){
+      drawSilhouetteGlow(en.shape, en.px, en.glowColor, en.x, en.y, en.isBoss?0.6:0.4);
+    }
     drawSprite(en.shape, en.palette, en.x, en.y, en.px, flash);
+    if(!isMobile) drawHullSheen(en.x, en.y, en.w, en.h);
     if(en.isBoss){
       const barW = W*0.6, barX = W/2-barW/2, barY = 18;
       ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(barX,barY,barW,8);
@@ -2112,14 +2168,18 @@ function drawSpecialButton(){
 
 function drawBanner(){
   if(bannerTimer<=0) return;
-  const a = Math.min(1, bannerTimer);
+  const shown = bannerDur - bannerTimer;
+  const fadeIn = Math.min(1, shown/0.18);
+  const fadeOut = Math.min(1, bannerTimer);
+  const a = Math.min(fadeIn, fadeOut);
+  const slide = (1-fadeIn)*-8;
   ctx.globalAlpha = a;
   ctx.font = "bold 20px 'Courier New', monospace";
   ctx.textAlign = 'center';
   ctx.fillStyle = '#0008';
-  ctx.fillRect(0, H*0.34, W, 40);
+  ctx.fillRect(0, H*0.34+slide, W, 40);
   ctx.fillStyle = '#ffe066';
-  ctx.fillText(bannerText, W/2, H*0.34+10);
+  ctx.fillText(bannerText, W/2, H*0.34+10+slide);
   ctx.globalAlpha = 1;
 }
 
@@ -2325,7 +2385,9 @@ function render(){
   ctx.clearRect(0,0,W,H);
   ctx.save();
   if(shakeTime>0){
-    ctx.translate((Math.random()-0.5)*shakeMag, (Math.random()-0.5)*shakeMag);
+    // taper the last stretch instead of cutting the jitter off abruptly
+    const mag = shakeMag * Math.min(1, shakeTime/0.15);
+    ctx.translate((Math.random()-0.5)*mag, (Math.random()-0.5)*mag);
   }
   drawStars();
   if(state!=='start'){
