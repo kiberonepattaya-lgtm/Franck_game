@@ -634,7 +634,7 @@ window.addEventListener('mouseup', ()=>{ mouseActive=false; mouseTarget=null; })
 /* ============================= RESET / LOGIC ============================= */
 function resetGame(){
   applyShipToPlayer(selectedShipIndex);
-  player.lives = Math.max(6, player.maxLives); player.score = 7000; player.lifeAwards = 0;
+  player.lives = Math.max(6, player.maxLives); player.score = 0; player.lifeAwards = 0;
   player.x = W/2 - player.w/2; player.y = H-player.h-30; player.velX = 0; player.velY = 0;
   player.invuln = 0; player.rapid = 0; player.mega = 0; player.overdrive = 0; player.ultra = 0;
   player.cooldown = 0; player.specialCooldown = 0; player.lastStone = null;
