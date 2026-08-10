@@ -281,6 +281,12 @@ const swarmShape = [
 ];
 const swarmPalette = { '#':'#3a0a2b', 'o':'#ff4fd8' };
 
+const megaBossPalette = buildPalette({
+  '#':'#2a0505', '2':'#5a1010', '3':'#8a1f1f', '4':'#d4523a', '5':'#ffb347',
+  'c':'#ff3b1a', 'g':'#ffe066', 'k':'#1a0505',
+  w:'#7a1f1f', l:'#ffd700', y:'#ff4400', e:'#fff2c9'
+});
+
 function spriteSize(shape, px){ return { w: shape[0].length * px, h: shape.length * px }; }
 
 function drawSprite(shape, palette, x, y, px, flash){
@@ -380,6 +386,7 @@ let elapsed = 0;
 let wave = 1;
 let killsThisWave = 0;
 let bossActive = false;
+let megaBossFightTimer = 0;
 let spawnTimer = 0.6;
 let shakeTime = 0, shakeMag = 0;
 let bannerText = '', bannerTimer = 0;
@@ -468,7 +475,10 @@ const ENEMY_TYPES = {
   bomber:  { shape:HEAVY_FLIPPED, palette:bomberPalette, px:3, hp:16, speed:35, score:90,
              fireInt:[1.8,2.6], bulletSpeed:190, bulletColor:'#b380ff', spreadShot:3, spreadAngle:0.12 },
   elite:   { shape:HEAVY_FLIPPED, palette:elitePalette, px:4, hp:45, speed:40, score:500,
-             fireInt:[0.5,0.9], bulletSpeed:260, isBoss:true }
+             fireInt:[0.5,0.9], bulletSpeed:260, isBoss:true },
+  megaboss: { shape:HEAVY_FLIPPED, palette:megaBossPalette, px:6, hp:45, speed:32, score:2500,
+             fireInt:[0.35,0.65], bulletSpeed:300, bulletColor:'#ffcc00', spreadShot:3, spreadAngle:0.4,
+             isBoss:true, isMegaBoss:true }
 };
 
 /* ============================= INPUT ============================= */
@@ -588,7 +598,7 @@ function resetGame(){
   player.invuln = 0; player.rapid = 0; player.mega = 0; player.overdrive = 0; player.ultra = 0;
   player.cooldown = 0; player.specialCooldown = 0; player.lastStone = null;
   playerBullets = []; enemyBullets = []; enemies = []; particles = []; powerups = []; allies = []; vortices = []; drones = [];
-  wave = 1; killsThisWave = 0; bossActive = false;
+  wave = 1; killsThisWave = 0; bossActive = false; megaBossFightTimer = 0;
   spawnTimer = 0.6; elapsed = 0; bannerTimer = 0; megaSpawnTimer = 18; timeFreeze = 0;
   upgradeChoices = []; enemySlowMult = 1;
 }
@@ -714,28 +724,44 @@ function spawnEnemy(typeKey, xOverride, hpOverride){
     spreadShot: t.spreadShot || 0, spreadAngle: t.spreadAngle || 0.3,
     diver: !!t.diver, homingSpeed: t.homingSpeed || 0, erratic: !!t.erratic,
     shootTimer: t.fireInt ? (t.fireInt[0]+Math.random()*(t.fireInt[1]-t.fireInt[0])) : Infinity,
-    isBoss: !!t.isBoss, flashT: 0, bossMinionsTimer: 0
+    isBoss: !!t.isBoss, isMegaBoss: !!t.isMegaBoss, flashT: 0, bossMinionsTimer: 0
   });
 }
 
 function triggerBoss(){
   bossActive = true;
-  const sz = spriteSize(ENEMY_TYPES.elite.shape, ENEMY_TYPES.elite.px);
-  const bossHp = (45 + wave*30)*2;
-  spawnEnemy('elite', W/2 - sz.w/2, bossHp);
-  showBanner('WAVE '+wave+' — BOSS INCOMING', 2.4);
+  megaBossFightTimer = 0;
+  const isMega = wave % 10 === 0;
+  const typeKey = isMega ? 'megaboss' : 'elite';
+  const sz = spriteSize(ENEMY_TYPES[typeKey].shape, ENEMY_TYPES[typeKey].px);
+  const bossHp = isMega ? (120 + wave*45)*3 : (45 + wave*30)*2;
+  spawnEnemy(typeKey, W/2 - sz.w/2, bossHp);
+  if(isMega){
+    showBanner('WAVE '+wave+' — MEGA BOSS INCOMING!!', 3);
+    shakeMag = 26; shakeTime = 0.6;
+    sfxExplode(true);
+  } else {
+    showBanner('WAVE '+wave+' — BOSS INCOMING', 2.4);
+  }
+}
+
+/* During a mega-boss fight, drop odds climb the longer the fight drags on —
+   a drastic ramp that rewards outlasting the fight instead of ending it fast. */
+function dropRateMult(){
+  return megaBossFightTimer>0 ? Math.min(6, 1 + megaBossFightTimer*0.3) : 1;
 }
 
 function maybeDropPowerup(en){
-  if(en.type!=='scout' && Math.random() < 0.2){
+  const mult = dropRateMult();
+  if(en.type!=='scout' && Math.random() < Math.min(0.9, 0.2*mult)){
     powerups.push({ x: en.x+en.w/2-6, y: en.y+en.h/2-6, w:12, h:12, speed:90, kind:'boost' });
   }
   const megaChance = en.isBoss ? 0.4 : (en.type==='scout' ? 0.02 : 0.05);
-  if(Math.random() < megaChance){
+  if(Math.random() < Math.min(0.95, megaChance*mult)){
     powerups.push({ x: en.x+en.w/2-8, y: en.y+en.h/2-8, w:16, h:16, speed:75, kind:'mega' });
   }
   const healthChance = en.isBoss ? 0.6 : (en.type==='scout' ? 0.012 : 0.035);
-  if(player.lives < player.maxLives && Math.random() < healthChance){
+  if(player.lives < player.maxLives && Math.random() < Math.min(0.95, healthChance*mult)){
     powerups.push({ x: en.x+en.w/2-7, y: en.y+en.h/2-7, w:14, h:14, speed:85, kind:'health' });
   }
 }
@@ -1226,6 +1252,7 @@ function activateSpecial(){
 
 function updateEnemy(en, dt){
   if(en.isBoss){
+    if(en.isMegaBoss) megaBossFightTimer += dt;
     if(en.y < 90){
       en.y += en.speed*enemySlowMult*dt;
     } else {
@@ -1233,10 +1260,18 @@ function updateEnemy(en, dt){
       en.x = clamp(en.baseX + Math.sin(elapsed*0.6+en.phase)*(W*0.32), 4, W-en.w-4);
       en.bossMinionsTimer -= dt;
       if(en.bossMinionsTimer<=0){
-        for(let i=0;i<2;i++){
-          spawnEnemy('fighter', Math.random()*(W-40)+20);
+        if(en.isMegaBoss){
+          const pool = ['fighter','gunner','swarm'];
+          for(let i=0;i<3;i++){
+            spawnEnemy(pool[Math.floor(Math.random()*pool.length)], Math.random()*(W-40)+20);
+          }
+          en.bossMinionsTimer = 3.5 + wave*0.2;
+        } else {
+          for(let i=0;i<2;i++){
+            spawnEnemy('fighter', Math.random()*(W-40)+20);
+          }
+          en.bossMinionsTimer = 5 + wave*0.5;
         }
-        en.bossMinionsTimer = 5 + wave*0.5;
       }
     }
   } else if(en.diver){
@@ -1275,7 +1310,7 @@ function updateEnemy(en, dt){
         enemyBullets.push({
           x:sx-2, y:sy, w:4, h:8,
           vx:Math.cos(ang)*en.bulletSpeed*enemySlowMult, vy:Math.sin(ang)*en.bulletSpeed*enemySlowMult,
-          color: en.isBoss ? '#ff5566' : en.bulletColor
+          color: en.isMegaBoss ? '#ffcc00' : (en.isBoss ? '#ff5566' : en.bulletColor)
         });
       }
       const fireRateMulti = en.isBoss ? 0.6 : 1;
@@ -1287,14 +1322,24 @@ function updateEnemy(en, dt){
 function damageEnemy(en, dmg, idx){
   en.hp -= dmg * (player.dmgMult||1); en.flashT = 0.08;
   if(en.hp<=0){
-    spawnExplosion(en.x+en.w/2, en.y+en.h/2, en.isBoss?'#ffd700':'#ffb347', en.isBoss?46:16, en.isBoss?220:150);
+    const big = en.isMegaBoss ? 70 : (en.isBoss ? 46 : 16);
+    const spd = en.isMegaBoss ? 300 : (en.isBoss ? 220 : 150);
+    spawnExplosion(en.x+en.w/2, en.y+en.h/2, en.isBoss?'#ffd700':'#ffb347', big, spd);
     sfxExplode(en.isBoss);
     player.score += en.score * (player.scoreMult||1);
     maybeDropPowerup(en);
+    if(en.isMegaBoss){
+      // guaranteed loot shower — the payoff for outlasting a mega-boss fight
+      powerups.push({ x: en.x+en.w/2-8-20, y: en.y+en.h/2-8, w:16, h:16, speed:75, kind:'mega' });
+      powerups.push({ x: en.x+en.w/2-10+20, y: en.y+en.h/2-10, w:20, h:20, speed:65, kind:'ultra' });
+      if(player.lives < player.maxLives){
+        powerups.push({ x: en.x+en.w/2-7, y: en.y+en.h/2-7, w:14, h:14, speed:85, kind:'health' });
+      }
+    }
     if(en.isBoss){
-      bossActive = false; wave++; killsThisWave = 0;
+      bossActive = false; wave++; killsThisWave = 0; megaBossFightTimer = 0;
       showBanner('WAVE '+wave, 2);
-      shakeMag = 20; shakeTime = 0.45;
+      shakeMag = en.isMegaBoss ? 30 : 20; shakeTime = en.isMegaBoss ? 0.6 : 0.45;
       enemies.splice(idx,1);
       triggerUpgradeChoice();
       return;
@@ -1790,7 +1835,8 @@ function drawEnemies(){
     if(en.isBoss){
       const barW = W*0.6, barX = W/2-barW/2, barY = 18;
       ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(barX,barY,barW,8);
-      ctx.fillStyle = '#ff4466'; ctx.fillRect(barX,barY, barW*Math.max(0,en.hp/en.maxHp), 8);
+      ctx.fillStyle = en.isMegaBoss ? '#ffcc00' : '#ff4466';
+      ctx.fillRect(barX,barY, barW*Math.max(0,en.hp/en.maxHp), 8);
       ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.strokeRect(barX,barY,barW,8);
     }
   }
