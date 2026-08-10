@@ -213,12 +213,12 @@ const SHIPS = [
     accent:{ '2':'#3a2010','3':'#5a3018','4':'#8a5030','5':'#c98a60','c':'#6a2a1a','g':'#ffb380','k':'#201008',
       w:'#4a3a1a', l:'#ff4444', y:'#ff4444', e:'#ffaa44' },
     special:{ name:'SPACE STRIKE', cooldown:20 }, megaName:'RPG MINIGUN ONLINE!', unlockScore:6000 },
-  { id:'specter', name:'THE SPECTER', shapeKey:'sleek', weapon:'phase', speed:250, px:4,
+  { id:'specter', name:'THE SPECTER', shapeKey:'sleek', weapon:'phase', speed:275, px:4,
     desc:'Fires homing phase shards that curve and pierce through enemies.',
     accent:{ '2':'#22103a','3':'#3a1a5a','4':'#7a3a9a','5':'#d6a0ff','c':'#4a1a6a','g':'#f0c9ff','k':'#160a26',
       w:'#2a1a4a', l:'#ff00ff', y:'#ff00ff', e:'#ffccff' },
-    special:{ name:'PHASE BLINK', cooldown:11 }, megaName:'PHASE SURGE!', unlockScore:6000,
-    dodgeChance:0.14 },
+    special:{ name:'PHASE RUPTURE', cooldown:8 }, megaName:'PHASE SURGE!', unlockScore:6000,
+    dodgeChance:0.22 },
   { id:'titan', name:'THE MAD TITAN', shapeKey:'heavy', weapon:'nova', speed:210, px:5,
     desc:'A secret superweapon. Its ultra snaps half the battlefield out of existence.',
     accent:{ '2':'#2a1040','3':'#4a2070','4':'#8a5ac0','5':'#e0c9ff','c':'#5a2090','g':'#f5e0ff','k':'#1a0a2a',
@@ -832,9 +832,9 @@ function fireWeapon(){
     });
     player.cooldown = (boosted ? 0.14 : 0.28) * (mods.rateMul||1);
   } else if(player.weapon==='phase'){
-    const speed = 470;
-    const count = mega ? 5 : (boosted ? 3 : 2);
-    const dmg = mega ? 3 : (boosted ? 2 : 1);
+    const speed = 520;
+    const count = mega ? 7 : (boosted ? 4 : 3);
+    const dmg = mega ? 5 : (boosted ? 3 : 2);
     for(let i=0;i<count;i++){
       const spreadOffset = count>1 ? (i/(count-1)-0.5)*0.6 : 0;
       const ang = -Math.PI/2 + spreadOffset;
@@ -842,10 +842,10 @@ function fireWeapon(){
         x:player.x+player.w/2-3, y:player.y-6, w:6, h:6,
         vx:Math.cos(ang)*speed, vy:Math.sin(ang)*speed,
         pierce:true, damage:dmg, color:accent.l, glow:true,
-        homing:true, speed, turnRate: mega ? 11 : 6.5
+        homing:true, speed, turnRate: mega ? 14 : 9
       });
     }
-    player.cooldown = mega ? 0.16 : (boosted ? 0.2 : 0.32);
+    player.cooldown = mega ? 0.13 : (boosted ? 0.16 : 0.24);
   } else if(player.weapon==='sticky'){
     if(mega){
       // MEGA: swaps to an RPG minigun — rapid explosive rounds auto-aimed at the nearest enemy
@@ -995,7 +995,7 @@ function activateSpecial(){
     } else if(shipId==='specter'){
       vortices.push({
         x: cx, y: Math.max(90, player.y-170),
-        timer:0, duration:3.2, dps:16, bossDps:65, pullStrength:280, radius:260, implode:30, bossImplode:35
+        timer:0, duration:4.0, dps:26, bossDps:100, pullStrength:340, radius:300, implode:50, bossImplode:70
       });
       spawnExplosion(cx, cy, '#ff00ff', 30, 220);
       sfxSpecial();
@@ -1088,19 +1088,31 @@ function activateSpecial(){
       showBanner('SPACE STRIKE!', 1.3);
       shakeMag = 22; shakeTime = 0.45;
     } else if(shipId==='specter'){
-      // PHASE BLINK: detonate at current spot, teleport clear, brief phase-invuln
+      // PHASE RUPTURE: tear open a rift at current spot, teleport clear, then unleash a
+      // full ring of homing phase shards that hunt down everything nearby
       for(let ei=enemies.length-1; ei>=0; ei--){
         const en = enemies[ei];
         const d = Math.hypot((en.x+en.w/2)-cx, (en.y+en.h/2)-cy);
-        if(d<=110) damageEnemy(en, 7, ei);
+        if(d<=150) damageEnemy(en, 12, ei);
       }
       spawnExplosion(cx, cy, player.accent.l, 26, 240);
       sfxExplode(false);
       player.y = clamp(player.y-90, H*0.32, H-player.h-8);
-      player.invuln = Math.max(player.invuln, 1.0);
+      player.invuln = Math.max(player.invuln, 1.4);
       spawnExplosion(player.x+player.w/2, player.y+player.h/2, '#ffffff', 16, 170);
-      showBanner('PHASE BLINK!', 1.2);
-      shakeMag = 10; shakeTime = 0.22;
+      const shardCount = 14;
+      for(let i=0;i<shardCount;i++){
+        const ang = (i/shardCount)*Math.PI*2;
+        playerBullets.push({
+          x:cx-3, y:cy-3, w:6, h:6,
+          vx:Math.cos(ang)*420, vy:Math.sin(ang)*420,
+          pierce:true, damage:4, color:player.accent.l, glow:true,
+          homing:true, speed:420, turnRate:10
+        });
+      }
+      sfxSpecial();
+      showBanner('PHASE RUPTURE!', 1.3);
+      shakeMag = 14; shakeTime = 0.3;
     } else if(shipId==='titan'){
       // STONE POWER: a random gauntlet ability fires each time — never the same cast twice in a row
       const stones = ['time','space','power','reality','soul','mind'].filter(s => s!==player.lastStone);
@@ -1321,7 +1333,7 @@ function spawnPhaseDrones(count){
       x: cx + spread*18, y: cy,
       vx: Math.cos(ang)*launchSpeed, vy: Math.sin(ang)*launchSpeed,
       target: null, speed: 260 + Math.random()*40,
-      life: 4.5, age: 0, damage: 7, radius: 46
+      life: 5.5, age: 0, damage: 12, radius: 60
     });
   }
   spawnExplosion(cx, cy, '#ff66ff', isMobile?8:16, 160);
@@ -1643,7 +1655,7 @@ function update(dt){
         shakeMag = 12; shakeTime = 0.3;
       } else if(p.kind==='mega'){
         player.mega = 9; sfxSpecial();
-        if(SHIPS[selectedShipIndex].id==='specter') spawnPhaseDrones(7);
+        if(SHIPS[selectedShipIndex].id==='specter') spawnPhaseDrones(10);
         showBanner(player.megaName || 'MEGA POWER!', 1.4);
         shakeMag = 8; shakeTime = 0.2;
       } else if(p.kind==='health'){
