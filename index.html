@@ -256,6 +256,31 @@ const elitePalette = buildPalette({
   w:'#2e7d3a', l:'#ffd700', y:'#ffd700', e:'#fff9e0'
 });
 
+const gunnerPalette = buildPalette({
+  '#':'#0a1f2b', '2':'#1f4a5a', '3':'#356f85', '4':'#7ab8cc', '5':'#e0f7ff',
+  'c':'#33cfff', 'g':'#d6faff', 'k':'#0f2530',
+  w:'#2d6a80', l:'#33e0ff', y:'#33e0ff', e:'#eafcff'
+});
+
+const bomberPalette = buildPalette({
+  '#':'#1a1a24', '2':'#3a3a52', '3':'#5a5a82', '4':'#9a9ac9', '5':'#e0e0ff',
+  'c':'#7a5aff', 'g':'#e0d6ff', 'k':'#14141c',
+  w:'#4a4a72', l:'#b380ff', y:'#b380ff', e:'#f0e6ff'
+});
+
+const diverPalette = {
+  '#':'#2b1405', 'h':'#ffdca6', 'o':'#ff8c1a', 'c':'#ffe066', 'b':'#7a3d0a'
+};
+
+const swarmShape = [
+"  #  ",
+" #o# ",
+"#ooo#",
+" #o# ",
+"  #  "
+];
+const swarmPalette = { '#':'#3a0a2b', 'o':'#ff4fd8' };
+
 function spriteSize(shape, px){ return { w: shape[0].length * px, h: shape.length * px }; }
 
 function drawSprite(shape, palette, x, y, px, flash){
@@ -433,7 +458,15 @@ let megaSpawnTimer = 18;
 const ENEMY_TYPES = {
   scout:   { shape:scoutShape, palette:scoutPalette, px:3, hp:1,  speed:120, score:10  },
   fighter: { shape:SLEEK_FLIPPED, palette:fighterPalette, px:2, hp:3, speed:70, score:30,
-             fireInt:[1.6,2.8], bulletSpeed:230 },
+             fireInt:[1.6,2.8], bulletSpeed:230, bulletColor:'#ff8844' },
+  swarm:   { shape:swarmShape, palette:swarmPalette, px:3, hp:1, speed:150, score:8,
+             erratic:true },
+  gunner:  { shape:SLEEK_FLIPPED, palette:gunnerPalette, px:2, hp:4, speed:55, score:45,
+             fireInt:[2.0,3.2], bulletSpeed:210, bulletColor:'#33cfff', spreadShot:3, spreadAngle:0.5 },
+  diver:   { shape:scoutShape, palette:diverPalette, px:3, hp:2, speed:190, score:25,
+             diver:true, homingSpeed:110 },
+  bomber:  { shape:HEAVY_FLIPPED, palette:bomberPalette, px:3, hp:16, speed:35, score:90,
+             fireInt:[1.8,2.6], bulletSpeed:190, bulletColor:'#b380ff', spreadShot:3, spreadAngle:0.12 },
   elite:   { shape:HEAVY_FLIPPED, palette:elitePalette, px:4, hp:45, speed:40, score:500,
              fireInt:[0.5,0.9], bulletSpeed:260, isBoss:true }
 };
@@ -647,10 +680,19 @@ function selectUpgrade(u){
 function waveKillTarget(){ return 8 + wave*3; }
 function spawnIntervalFor(){ return Math.max(0.35, 1.1 - wave*0.05); }
 
+/* Enemy variety widens as waves climb: each type joins the pool at its own
+   wave threshold, so later waves mix far more enemy behaviors than early ones. */
 function pickEnemyType(){
   if(wave===1) return 'scout';
-  const fighterChance = Math.min(0.5, 0.15 + wave*0.04);
-  return Math.random() < fighterChance ? 'fighter' : 'scout';
+  const options = [{ type:'scout', w:1 }, { type:'fighter', w:Math.min(1.4, 0.4+wave*0.1) }];
+  if(wave>=3) options.push({ type:'swarm',  w:Math.min(1.1, 0.4+wave*0.06) });
+  if(wave>=4) options.push({ type:'gunner', w:Math.min(1.0, 0.3+wave*0.06) });
+  if(wave>=5) options.push({ type:'diver',  w:Math.min(1.0, 0.35+wave*0.05) });
+  if(wave>=6) options.push({ type:'bomber', w:Math.min(0.8, 0.2+wave*0.04) });
+  const total = options.reduce((s,o)=>s+o.w, 0);
+  let r = Math.random()*total;
+  for(const o of options){ r -= o.w; if(r<=0) return o.type; }
+  return options[options.length-1].type;
 }
 
 let enemyIdCounter = 1;
@@ -668,7 +710,9 @@ function spawnEnemy(typeKey, xOverride, hpOverride){
     score: t.score,
     phase: Math.random()*Math.PI*2,
     driftAmp: 40+Math.random()*40, driftFreq: 0.8+Math.random()*0.6,
-    fireInt: t.fireInt, bulletSpeed: t.bulletSpeed,
+    fireInt: t.fireInt, bulletSpeed: t.bulletSpeed, bulletColor: t.bulletColor || '#ff8844',
+    spreadShot: t.spreadShot || 0, spreadAngle: t.spreadAngle || 0.3,
+    diver: !!t.diver, homingSpeed: t.homingSpeed || 0, erratic: !!t.erratic,
     shootTimer: t.fireInt ? (t.fireInt[0]+Math.random()*(t.fireInt[1]-t.fireInt[0])) : Infinity,
     isBoss: !!t.isBoss, flashT: 0, bossMinionsTimer: 0
   });
@@ -1195,9 +1239,17 @@ function updateEnemy(en, dt){
         en.bossMinionsTimer = 5 + wave*0.5;
       }
     }
+  } else if(en.diver){
+    // Kamikaze: steers horizontally toward the player as it dives, ignoring the sine drift
+    en.y += en.speed*enemySlowMult*dt;
+    const targetX = player.x+player.w/2 - en.w/2;
+    const step = clamp(targetX-en.x, -en.homingSpeed*enemySlowMult*dt, en.homingSpeed*enemySlowMult*dt);
+    en.x = clamp(en.x+step, 0, W-en.w);
   } else {
     en.y += en.speed*enemySlowMult*dt;
-    en.x = clamp(en.baseX + Math.sin(elapsed*en.driftFreq+en.phase)*en.driftAmp, 0, W-en.w);
+    const amp = en.erratic ? en.driftAmp*1.7 : en.driftAmp;
+    const freq = en.erratic ? en.driftFreq*2.4 : en.driftFreq;
+    en.x = clamp(en.baseX + Math.sin(elapsed*freq+en.phase)*amp, 0, W-en.w);
   }
   if(en.flashT>0) en.flashT -= dt;
 
@@ -1215,14 +1267,15 @@ function updateEnemy(en, dt){
 
       const dx = (target.x+target.w/2)-sx, dy=(target.y+target.h/2)-sy;
       const len = Math.hypot(dx,dy)||1;
-      const bulletCount = en.isBoss ? 2 : 1;
+      const bulletCount = en.spreadShot || (en.isBoss ? 2 : 1);
+      const spreadAngle = en.isBoss ? 0.3 : en.spreadAngle;
       for(let i=0;i<bulletCount;i++){
-        const spread = bulletCount>1 ? (i-0.5)*0.3 : 0;
+        const spread = bulletCount>1 ? (i/(bulletCount-1)-0.5)*spreadAngle : 0;
         const ang = Math.atan2(dy, dx) + spread;
         enemyBullets.push({
           x:sx-2, y:sy, w:4, h:8,
           vx:Math.cos(ang)*en.bulletSpeed*enemySlowMult, vy:Math.sin(ang)*en.bulletSpeed*enemySlowMult,
-          color: en.isBoss ? '#ff5566' : '#ff8844'
+          color: en.isBoss ? '#ff5566' : en.bulletColor
         });
       }
       const fireRateMulti = en.isBoss ? 0.6 : 1;
@@ -1402,7 +1455,18 @@ function update(dt){
   if(!bossActive && timeFreeze<=0){
     spawnTimer -= dt;
     if(spawnTimer<=0 && enemies.length<16){
-      spawnEnemy(pickEnemyType());
+      const type = pickEnemyType();
+      if(type==='swarm'){
+        // swarm drones always arrive in a tight cluster, never solo
+        const sz = spriteSize(swarmShape, ENEMY_TYPES.swarm.px);
+        const count = 2+Math.floor(Math.random()*2);
+        const clusterX = Math.random()*(W-sz.w-count*22)+11;
+        for(let i=0;i<count;i++){
+          spawnEnemy('swarm', clamp(clusterX+i*22, 0, W-sz.w));
+        }
+      } else {
+        spawnEnemy(type);
+      }
       spawnTimer = spawnIntervalFor() + Math.random()*0.3;
     }
   }
